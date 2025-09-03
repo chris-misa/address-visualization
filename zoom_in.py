@@ -16,23 +16,28 @@ import ipaddress
 class Scene:
 
     def __init__(self, filepath, target):
-
-        # Load IP addresses
-
-        addrs = np.array([int(ipaddress.ip_address(x)) for x in  np.loadtxt(filepath, dtype = str)])
-
-        print("Loaded addresses...")
         
         hc = HilbertCurve(p = 16, n = 2) # 2^np points so with n = 2 we need p = 16
 
-        locs = np.array(hc.points_from_distances(addrs)).astype('f4')
-
-        # Normalize to [-1, 1]
-        locs /= 2 ** (16 - 1)
-        locs -= 1
-        locs /= 2
-
-        print("Computed distances...")
+        # Load IP addresses
+        cachepath = filepath + ".cache.npy"
+        if os.path.exists(cachepath):
+            print("Loading cache...")
+            locs = np.load(cachepath)
+        else:
+            print(f"Loading from {filepath}...")
+            addrs = np.array([int(ipaddress.ip_address(x)) for x in  np.loadtxt(filepath, dtype = str)])
+            print("Loaded addresses.")
+            
+            
+            locs = np.array(hc.points_from_distances(addrs)).astype('f4')
+            
+            # Normalize to [-1, 1]
+            locs /= 2 ** (16 - 1)
+            locs -= 1
+            print("Computed distances.")
+            
+            np.save(cachepath, locs)
 
         # Setup graphics
         
@@ -43,12 +48,14 @@ class Scene:
                 #version 330 core
 
                 uniform float zoom = 1.0;
+                uniform float aspect = 1.0;
                 uniform vec2 target = vec2(0,0);
             
                 layout (location = 0) in vec2 in_vertex;
 
                 void main() {
                     gl_Position = vec4((in_vertex - target) * zoom, 0.0, 1.0);
+                    gl_Position.x /= aspect;
                 }
             ''',
             fragment_shader='''
@@ -66,20 +73,31 @@ class Scene:
             mode = self.ctx.POINTS
         )
 
-        self.zoom = 1.0
+        self.start_time = None
+        self.zoom = 1
         self.target = np.array(hc.point_from_distance(int(ipaddress.ip_address(target)))).astype('f4')
         self.target /= 2 ** (16 - 1)
         self.target -= 1
-        self.target /= 2
 
+        self.duration = 60 * 1000
+
+        _, _, sw, sh = self.ctx.viewport
+        self.aspect = sw / sh
+        self.program['aspect'] = self.aspect
+        
 
     def render(self):
+        if self.start_time is None:
+            self.start_time = pygame.time.get_ticks()
+            
         self.ctx.clear()
         self.ctx.point_size = 1
         self.program['zoom'] = self.zoom
         self.program['target'] = self.target
-        self.zoom *= 1.005
         self.vao.render()
+
+        cur_time = (pygame.time.get_ticks() - self.start_time) / self.duration
+        self.zoom = 2 ** (28 * cur_time - 4)
         
 if __name__ == "__main__":
     if len(sys.argv) != 3:
@@ -89,9 +107,9 @@ if __name__ == "__main__":
     os.environ['SDL_WINDOWS_DPI_AWARENESS'] = 'permonitorv2'
 
     pygame.init()
-    pygame.display.set_mode((800, 800), flags=pygame.OPENGL | pygame.DOUBLEBUF, vsync=True)
+    pygame.display.set_mode((1920, 1080), flags=pygame.OPENGL | pygame.DOUBLEBUF, vsync=True)
         
-    scene = Scene(sys.argv[1], target = sys.argv[2])
+    scene = Scene(sys.argv[1], sys.argv[2])
 
     while True:
         for event in pygame.event.get():
