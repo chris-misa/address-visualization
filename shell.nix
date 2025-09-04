@@ -19,7 +19,7 @@ let
       pygame-ce
       pyglm
       hilbertcurve
-      # ipaddress
+      pandas
     ]))
   ];
 }

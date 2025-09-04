@@ -9,6 +9,7 @@ import sys
 import glm
 import moderngl
 import numpy as np
+import pandas as pd
 import pygame
 from hilbertcurve.hilbertcurve import HilbertCurve
 import ipaddress
@@ -20,26 +21,39 @@ class Scene:
         hc = HilbertCurve(p = 16, n = 2) # 2^np points so with n = 2 we need p = 16
 
         # Load IP addresses
-        cachepath = filepath + ".cache.npy"
+        cachepath = filepath + ".cache"
         if os.path.exists(cachepath):
             print("Loading cache...")
-            locs = np.load(cachepath)
+            addrs = pd.read_pickle(cachepath)
+            locs = np.stack((addrs.x, addrs.y), axis = 1)
         else:
             print(f"Loading from {filepath}...")
-            addrs = np.array([int(ipaddress.ip_address(x)) for x in  np.loadtxt(filepath, dtype = str)])
+            addrs = pd.read_csv(filepath)
+            addrs['i'] = addrs.addr.apply(lambda x: int(ipaddress.ip_address(x)))
+            
             print("Loaded addresses.")
             
             
-            locs = np.array(hc.points_from_distances(addrs)).astype('f4')
+            locs = np.array(hc.points_from_distances(addrs.i)).astype('f4')
             
             # Normalize to [-1, 1]
             locs /= 2 ** (16 - 1)
             locs -= 1
+            addrs['x'] = locs[:,0]
+            addrs['y'] = locs[:,1]
             print("Computed distances.")
             
-            np.save(cachepath, locs)
+            addrs.to_pickle(cachepath)
 
         # Setup graphics
+
+        minAlpha = addrs.alpha.min()
+        maxAlpha = addrs.alpha.max()
+
+        vertData = np.concatenate((
+            locs,
+            np.stack((360.0 - 240.0 * (addrs.alpha - minAlpha) / (maxAlpha - minAlpha), addrs.r2), axis = 1)
+        ), axis = 1).astype('f4')
         
         self.ctx = moderngl.get_context()
 
@@ -51,25 +65,89 @@ class Scene:
                 uniform float aspect = 1.0;
                 uniform vec2 target = vec2(0,0);
             
-                layout (location = 0) in vec2 in_vertex;
+                layout (location = 0) in vec4 in_vertex;
+
+                varying vec2 color;
 
                 void main() {
-                    gl_Position = vec4((in_vertex - target) * zoom, 0.0, 1.0);
+                    gl_Position = vec4((in_vertex.xy - target) * zoom, 0.0, 1.0);
                     gl_Position.x /= aspect;
+                    color = in_vertex.zw;
                 }
             ''',
             fragment_shader='''
                 #version 330 core
 
+                varying vec2 color;
+
+// From: https://gist.github.com/akella/059d9877b90f966c9181ffa2bc5ffd65
+
+float fixedpow(float a, float x)
+{
+    return pow(abs(a), x) * sign(a);
+}
+
+float cbrt(float a)
+{
+    return fixedpow(a, 0.3333333333);
+}
+
+vec3 lsrgb2oklab(vec3 c)
+{
+    float l = 0.4122214708 * c.r + 0.5363325363 * c.g + 0.0514459929 * c.b;
+    float m = 0.2119034982 * c.r + 0.6806995451 * c.g + 0.1073969566 * c.b;
+    float s = 0.0883024619 * c.r + 0.2817188376 * c.g + 0.6299787005 * c.b;
+
+    float l_ = cbrt(l);
+    float m_ = cbrt(m);
+    float s_ = cbrt(s);
+
+    return vec3(
+        0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+        1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+        0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
+    );
+}
+
+vec3 oklab2lsrgb(vec3 c)
+{
+    float l_ = c.r + 0.3963377774 * c.g + 0.2158037573 * c.b;
+    float m_ = c.r - 0.1055613458 * c.g - 0.0638541728 * c.b;
+    float s_ = c.r - 0.0894841775 * c.g - 1.2914855480 * c.b;
+
+    float l = l_ * l_ * l_;
+    float m = m_ * m_ * m_;
+    float s = s_ * s_ * s_;
+
+    return vec3(
+        4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+        -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+        -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
+    );
+}
+
+vec3 oklch2lsrgb(vec3 c)
+{
+    float h = radians(c.b);
+    return oklab2lsrgb(vec3(
+        c.r,
+        c.g * cos(h),
+        c.g * sin(h)
+    ));
+}
+            
                 void main() {
-                    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+                    float hue = color.x;
+                    vec4 c = vec4(0.0, 0.0, 0.0, 1.0);
+                    c.rgb = oklch2lsrgb(vec3(0.65, 0.15, hue));
+                    gl_FragColor = c;
                 }
             ''',
         )
 
-        self.vbo = self.ctx.buffer(locs.tobytes())
+        self.vbo = self.ctx.buffer(vertData.tobytes())
         self.vao = self.ctx.vertex_array(
-            self.program, [(self.vbo, '2f', 'in_vertex')],
+            self.program, [(self.vbo, '4f', 'in_vertex')],
             mode = self.ctx.POINTS
         )
 
