@@ -52,7 +52,7 @@ class Scene:
 
         vertData = np.concatenate((
             locs,
-            np.stack((360.0 - 240.0 * (addrs.alpha - minAlpha) / (maxAlpha - minAlpha), addrs.r2), axis = 1)
+            np.stack((260.0 - 200.0 * ((addrs.alpha - minAlpha) / (maxAlpha - minAlpha)) ** 0.5, addrs.r2), axis = 1)
         ), axis = 1).astype('f4')
         
         self.ctx = moderngl.get_context()
@@ -76,9 +76,11 @@ class Scene:
                 }
             ''',
             fragment_shader='''
-                #version 330 core
+#version 330 core
 
-                varying vec2 color;
+uniform float zoom = 1.0;
+                
+varying vec2 color;
 
 // From: https://gist.github.com/akella/059d9877b90f966c9181ffa2bc5ffd65
 
@@ -136,12 +138,15 @@ vec3 oklch2lsrgb(vec3 c)
     ));
 }
             
-                void main() {
-                    float hue = color.x;
-                    vec4 c = vec4(0.0, 0.0, 0.0, 1.0);
-                    c.rgb = oklch2lsrgb(vec3(0.65, 0.15, hue));
-                    gl_FragColor = c;
-                }
+void main() {
+    vec2 coord = gl_PointCoord - vec2(0.5);
+    float alpha = 1.0; // zoom * 0.0001 / pow(length(coord), 4);
+    float hue = color.x;
+    vec4 c = vec4(0.0, 0.0, 0.0, alpha);
+    c.rgb = oklch2lsrgb(vec3(0.72, 0.15, hue));
+    gl_FragColor = c;
+}
+            
             ''',
         )
 
@@ -169,6 +174,7 @@ vec3 oklch2lsrgb(vec3 c)
             self.start_time = pygame.time.get_ticks()
             
         self.ctx.clear()
+        self.ctx.enable(moderngl.BLEND)
         self.ctx.point_size = 1
         self.program['zoom'] = self.zoom
         self.program['target'] = self.target
@@ -185,7 +191,7 @@ if __name__ == "__main__":
     os.environ['SDL_WINDOWS_DPI_AWARENESS'] = 'permonitorv2'
 
     pygame.init()
-    pygame.display.set_mode((1920, 1080), flags=pygame.OPENGL | pygame.DOUBLEBUF, vsync=True)
+    pygame.display.set_mode((1920, 1080), flags=pygame.OPENGL | pygame.DOUBLEBUF | pygame.FULLSCREEN, vsync=True)
         
     scene = Scene(sys.argv[1], sys.argv[2])
 
