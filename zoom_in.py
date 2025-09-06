@@ -14,9 +14,85 @@ import pygame
 from hilbertcurve.hilbertcurve import HilbertCurve
 import ipaddress
 
+class TextTex:
+    def __init__(self, init_text, font_size = 32):
+        self.ctx = moderngl.get_context()
+        self.font = pygame.font.Font(None, font_size)
+        self.update_text(init_text)
+
+    def update_text(self, text):
+        text = self.font.render(text, True, (255,255,255))
+        self.tex = self.ctx.texture(text.get_size(), 4, pygame.image.tobytes(text, "RGBA"))
+        self.sampler = self.ctx.sampler(texture = self.tex)
+        self.sampler.filter = (self.ctx.NEAREST, self.ctx.NEAREST)
+
+    def use(self):
+        self.sampler.use()
+
+# From: https://github.com/moderngl/moderngl/blob/main/examples/08_texture.py
+class PlaneGeometry:
+    def __init__(self):
+        self.ctx = moderngl.get_context()
+        vertices = np.array([
+            -0.5, 0.5, 0.0, 0.0, 0.0,
+            0.5, 0.5, 0.0, 1.0, 0.0,
+            -0.5, -0.5, 0.0, 0.0, 1.0,
+            -0.5, -0.5, 0.0, 0.0, 1.0,
+            0.5, 0.5, 0.0, 1.0, 0.0,
+            0.5, -0.5, 0.0, 1.0, 1.0,
+        ])
+
+        self.vbo = self.ctx.buffer(vertices.astype('f4').tobytes())
+
+    def vertex_array(self, program):
+        return self.ctx.vertex_array(program, [(self.vbo, '3f 2f', 'in_vertex', 'in_uv')])
+        
+
+class TextPlane:
+    def __init__(self, init_text, font_size = 32):
+        self.ctx = moderngl.get_context()
+        self.prog = self.ctx.program(
+            vertex_shader = '''
+            #version 330 core
+            uniform float scale = 1.0;
+            uniform float dy = 0.0;
+            layout (location = 0) in vec3 in_vertex;
+            layout (location = 1) in vec2 in_uv;
+            out vec2 v_uv;
+
+            void main() {
+              v_uv = in_uv;
+              gl_Position = vec4(in_vertex * scale, 1.0);
+              gl_Position.y += dy;
+            }
+            ''',
+            fragment_shader = '''
+            #version 330 core
+            uniform sampler2D Tex;
+            in vec2 v_uv;
+            void main() {
+              gl_FragColor = texture(Tex, v_uv);
+            }
+            '''
+        )
+        _, _, _, sh = self.ctx.viewport
+        self.prog['scale'] = font_size / sh
+        self.prog['dy'] = -1 + (font_size / sh)
+        self.tex = TextTex(init_text, font_size = font_size)
+        self.geom = PlaneGeometry().vertex_array(self.prog)
+
+    def update_text(self, text):
+        self.tex.update_text(text)
+
+    def render(self):
+        self.tex.use()
+        self.geom.render()
+    
 class Scene:
 
-    def __init__(self, filepath, target):
+    def __init__(self, filepath, target, display_surface):
+
+        self.display_surface = display_surface
         
         hc = HilbertCurve(p = 16, n = 2) # 2^np points so with n = 2 we need p = 16
 
@@ -52,7 +128,7 @@ class Scene:
 
         vertData = np.concatenate((
             locs,
-            np.stack((260.0 - 200.0 * ((addrs.alpha - minAlpha) / (maxAlpha - minAlpha)) ** 0.5, addrs.r2), axis = 1)
+            np.stack([(addrs.alpha - minAlpha) / (maxAlpha - minAlpha), addrs.r2], axis = 1)
         ), axis = 1).astype('f4')
         
         self.ctx = moderngl.get_context()
@@ -82,60 +158,17 @@ uniform float zoom = 1.0;
                 
 varying vec2 color;
 
-// From: https://gist.github.com/akella/059d9877b90f966c9181ffa2bc5ffd65
+vec3 color_map(float t) {
 
-float fixedpow(float a, float x)
-{
-    return pow(abs(a), x) * sign(a);
-}
+    const vec3 c0 = vec3(0.2777273272234177, 0.005407344544966578, 0.3340998053353061);
+    const vec3 c1 = vec3(0.1050930431085774, 1.404613529898575, 1.384590162594685);
+    const vec3 c2 = vec3(-0.3308618287255563, 0.214847559468213, 0.09509516302823659);
+    const vec3 c3 = vec3(-4.634230498983486, -5.799100973351585, -19.33244095627987);
+    const vec3 c4 = vec3(6.228269936347081, 14.17993336680509, 56.69055260068105);
+    const vec3 c5 = vec3(4.776384997670288, -13.74514537774601, -65.35303263337234);
+    const vec3 c6 = vec3(-5.435455855934631, 4.645852612178535, 26.3124352495832);
 
-float cbrt(float a)
-{
-    return fixedpow(a, 0.3333333333);
-}
-
-vec3 lsrgb2oklab(vec3 c)
-{
-    float l = 0.4122214708 * c.r + 0.5363325363 * c.g + 0.0514459929 * c.b;
-    float m = 0.2119034982 * c.r + 0.6806995451 * c.g + 0.1073969566 * c.b;
-    float s = 0.0883024619 * c.r + 0.2817188376 * c.g + 0.6299787005 * c.b;
-
-    float l_ = cbrt(l);
-    float m_ = cbrt(m);
-    float s_ = cbrt(s);
-
-    return vec3(
-        0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
-        1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
-        0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
-    );
-}
-
-vec3 oklab2lsrgb(vec3 c)
-{
-    float l_ = c.r + 0.3963377774 * c.g + 0.2158037573 * c.b;
-    float m_ = c.r - 0.1055613458 * c.g - 0.0638541728 * c.b;
-    float s_ = c.r - 0.0894841775 * c.g - 1.2914855480 * c.b;
-
-    float l = l_ * l_ * l_;
-    float m = m_ * m_ * m_;
-    float s = s_ * s_ * s_;
-
-    return vec3(
-        4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
-        -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
-        -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
-    );
-}
-
-vec3 oklch2lsrgb(vec3 c)
-{
-    float h = radians(c.b);
-    return oklab2lsrgb(vec3(
-        c.r,
-        c.g * cos(h),
-        c.g * sin(h)
-    ));
+    return c0+t*(c1+t*(c2+t*(c3+t*(c4+t*(c5+t*c6)))));
 }
             
 void main() {
@@ -143,7 +176,8 @@ void main() {
     float alpha = 1.0; // zoom * 0.0001 / pow(length(coord), 4);
     float hue = color.x;
     vec4 c = vec4(0.0, 0.0, 0.0, alpha);
-    c.rgb = oklch2lsrgb(vec3(0.72, 0.15, hue));
+    // c.rgb = oklch2lsrgb(vec3(0.72, 0.15, hue));
+    c.rgb = color_map(hue);
     gl_FragColor = c;
 }
             
@@ -162,12 +196,14 @@ void main() {
         self.target /= 2 ** (16 - 1)
         self.target -= 1
 
-        self.duration = 120 * 1000
+        self.duration = 60 * 1000
 
         _, _, sw, sh = self.ctx.viewport
         self.aspect = sw / sh
         self.height_pix = sh
         self.program['aspect'] = self.aspect
+
+        self.scale_text = TextPlane("", font_size = 48)
         
 
     def render(self):
@@ -182,6 +218,10 @@ void main() {
         self.program['target'] = self.target
         self.vao.render()
 
+        # Easiest way would be to simply compute how large a prefix the current screen shows...
+        self.scale_text.update_text(f"Z = {self.zoom :.2f}")
+        self.scale_text.render()
+
         cur_time = (pygame.time.get_ticks() - self.start_time) / self.duration
         self.zoom = 2 ** (28 * cur_time - 4)
         
@@ -193,9 +233,9 @@ if __name__ == "__main__":
     os.environ['SDL_WINDOWS_DPI_AWARENESS'] = 'permonitorv2'
 
     pygame.init()
-    pygame.display.set_mode((1920, 1080), flags=pygame.OPENGL | pygame.DOUBLEBUF | pygame.FULLSCREEN, vsync=True)
+    display_surface = pygame.display.set_mode((1920, 1080), flags=pygame.OPENGL | pygame.DOUBLEBUF | pygame.FULLSCREEN, vsync=True)
         
-    scene = Scene(sys.argv[1], sys.argv[2])
+    scene = Scene(sys.argv[1], sys.argv[2], display_surface)
 
     while True:
         for event in pygame.event.get():
