@@ -203,7 +203,7 @@ void main() {
         self.height_pix = sh
         self.program['aspect'] = self.aspect
 
-        self.scale_text = TextPlane("", font_size = 48)
+        self.scale_text = TextPlane("", font_size = 52)
         
 
     def render(self):
@@ -212,14 +212,16 @@ void main() {
             
         self.ctx.clear()
         self.ctx.enable(moderngl.BLEND)
+        
         sz = self.zoom * float(self.height_pix) / (2.0 ** (16.0))
+
         self.ctx.point_size = sz if sz > 1.0 else 1
         self.program['zoom'] = self.zoom
         self.program['target'] = self.target
         self.vao.render()
 
-        # Easiest way would be to simply compute how large a prefix the current screen shows...
-        self.scale_text.update_text(f"Z = {self.zoom :.2f}")
+        pixel_pfx_len = 32 - np.log2(1.0 / sz) # what length of prefix does each pixel represent
+        self.scale_text.update_text(f"l = {pixel_pfx_len :.2f}")
         self.scale_text.render()
 
         cur_time = (pygame.time.get_ticks() - self.start_time) / self.duration
