@@ -33,7 +33,7 @@ class Scene:
             
             print("Loaded addresses.")
             
-            
+            # x, y in [0, 2^16]
             locs = np.array(hc.points_from_distances(addrs.i)).astype('f4')
             
             # Normalize to [-1, 1]
@@ -166,6 +166,7 @@ void main() {
 
         _, _, sw, sh = self.ctx.viewport
         self.aspect = sw / sh
+        self.height_pix = sh
         self.program['aspect'] = self.aspect
         
 
@@ -175,7 +176,8 @@ void main() {
             
         self.ctx.clear()
         self.ctx.enable(moderngl.BLEND)
-        self.ctx.point_size = 1
+        sz = self.zoom * float(self.height_pix) / (2.0 ** (16.0))
+        self.ctx.point_size = sz if sz > 1.0 else 1
         self.program['zoom'] = self.zoom
         self.program['target'] = self.target
         self.vao.render()
