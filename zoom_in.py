@@ -87,7 +87,61 @@ class TextPlane:
     def render(self):
         self.tex.use()
         self.geom.render()
-    
+
+
+class LegendKey:
+    def __init__(self, hsize, vsize):
+        self.ctx = moderngl.get_context()
+        vertices = np.array([
+            -0.5, -0.5, 0.0,
+            -0.5, 0.5, 0.0,
+            -0.5, 0.0, 0.0,
+            0.5, 0.0, 0.0,
+            0.5, -0.5, 0.0,
+            0.5, 0.5, 0.0
+        ])
+        self.vbo = self.ctx.buffer(vertices.astype('f4').tobytes())
+        self.prog = self.ctx.program(
+            vertex_shader = '''
+            #version 330 core
+            uniform float hscale = 1.0;
+            uniform float vscale = 1.0;
+            uniform float dy = 0.0;
+            layout (location = 0) in vec3 in_vertex;
+
+            void main() {
+              vec3 v = in_vertex;
+              v.x *= hscale;
+              v.y *= vscale;
+              gl_Position = vec4(v, 1.0);
+              gl_Position.y += dy;
+            }
+            ''',
+            fragment_shader = '''
+            #version 330 core
+            void main() {
+              gl_FragColor = vec4(1.0, 1.0, 1.0, 0.6);
+            }
+            '''
+        )
+        self.geom = self.ctx.vertex_array(
+            self.prog,
+            [(self.vbo, '3f', 'in_vertex')],
+            mode = moderngl.LINES
+        )
+        _, _, sw, sh = self.ctx.viewport
+        self.sw = sw
+        self.sh = sh
+        self.update_size(hsize, vsize)
+        
+    def update_size(self, hsize, vsize):
+        self.prog['hscale'] = hsize / self.sw
+        self.prog['vscale'] = vsize / self.sh
+        self.prog['dy'] = -1 + 2.0 * vsize / self.sh
+
+    def render(self):
+        self.geom.render()
+        
 class Scene:
 
     def __init__(self, filepath, target, display_surface):
@@ -204,6 +258,9 @@ void main() {
         self.program['aspect'] = self.aspect
 
         self.scale_text = TextPlane("", font_size = 52)
+
+        self.legend_key = LegendKey(300, 50)
+        self.l = 4
         
 
     def render(self):
@@ -213,16 +270,26 @@ void main() {
         self.ctx.clear()
         self.ctx.enable(moderngl.BLEND)
         
-        sz = self.zoom * float(self.height_pix) / (2.0 ** (16.0))
 
-        self.ctx.point_size = sz if sz > 1.0 else 1
-        self.program['zoom'] = self.zoom
-        self.program['target'] = self.target
+        if self.l < 32:
+            sz = self.zoom * float(self.height_pix) / (2.0 ** (16.0))
+            
+            self.ctx.point_size = sz if sz > 1.0 else 1
+            self.program['zoom'] = self.zoom
+            self.program['target'] = self.target
+            
+            side_len = sz * 2 ** ((32 - self.l) / 2)
+            if side_len > 800:
+                self.l += 4
+                side_len = sz * 2 ** ((32 - self.l) / 2)
+                
+            
+            # pixel_pfx_len = 32 - np.log2(1.0 / sz) # what length of prefix does each pixel represent
+            self.scale_text.update_text(f"/{self.l}")
+            self.legend_key.update_size(side_len * 2, 50) # * 2 because the points are actually drawn 2x larger from -1 to 1...
         self.vao.render()
-
-        pixel_pfx_len = 32 - np.log2(1.0 / sz) # what length of prefix does each pixel represent
-        self.scale_text.update_text(f"l = {pixel_pfx_len :.2f}")
         self.scale_text.render()
+        self.legend_key.render()
 
         cur_time = (pygame.time.get_ticks() - self.start_time) / self.duration
         self.zoom = 2 ** (28 * cur_time - 4)
