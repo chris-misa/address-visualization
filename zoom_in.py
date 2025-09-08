@@ -14,6 +14,8 @@ import pygame
 from hilbertcurve.hilbertcurve import HilbertCurve
 import ipaddress
 
+COLOR_SCALE = 0.75
+
 class TextTex:
     def __init__(self, init_text, font_size = 32):
         self.ctx = moderngl.get_context()
@@ -49,12 +51,13 @@ class PlaneGeometry:
         
 
 class TextPlane:
-    def __init__(self, init_text, font_size = 32):
+    def __init__(self, init_text, font_size = 32, x = 0.0, y = 1.0):
         self.ctx = moderngl.get_context()
         self.prog = self.ctx.program(
             vertex_shader = '''
             #version 330 core
             uniform float scale = 1.0;
+            uniform float dx = 0.0;
             uniform float dy = 0.0;
             layout (location = 0) in vec3 in_vertex;
             layout (location = 1) in vec2 in_uv;
@@ -63,7 +66,8 @@ class TextPlane:
             void main() {
               v_uv = in_uv;
               gl_Position = vec4(in_vertex * scale, 1.0);
-              gl_Position.y += dy;
+              gl_Position.x -= dx;
+              gl_Position.y -= dy;
             }
             ''',
             fragment_shader = '''
@@ -75,9 +79,10 @@ class TextPlane:
             }
             '''
         )
-        _, _, _, sh = self.ctx.viewport
+        _, _, sw, sh = self.ctx.viewport
         self.prog['scale'] = font_size / sh
-        self.prog['dy'] = -1 + (font_size / sh)
+        self.prog['dy'] = y - (font_size / sh)
+        self.prog['dx'] = x
         self.tex = TextTex(init_text, font_size = font_size)
         self.geom = PlaneGeometry().vertex_array(self.prog)
 
@@ -86,6 +91,58 @@ class TextPlane:
 
     def render(self):
         self.tex.use()
+        self.geom.render()
+
+class ColorScale:
+    def __init__(self):
+        self.ctx = moderngl.get_context()
+        self.prog = self.ctx.program(
+            vertex_shader = '''
+            #version 330 core
+            uniform float hscale = 1.0;
+            uniform float vscale = 1.0;
+            uniform float dy = 0.0;
+            layout (location = 0) in vec3 in_vertex;
+            layout (location = 1) in vec2 in_uv;
+            out vec2 v_uv;
+
+            void main() {
+              v_uv = in_uv;
+              vec3 v = in_vertex;
+              v.x *= hscale;
+              v.y *= vscale;
+              v.y += dy;
+              gl_Position = vec4(v, 1.0);
+            }
+            ''',
+            fragment_shader = f'''
+            #version 330 core
+            in vec2 v_uv;
+            
+            //  Function from Iñigo Quiles
+            //  https://www.shadertoy.com/view/MsS3Wc
+            vec3 hsb2rgb( in vec3 c ) {{
+                vec3 rgb = clamp(abs(mod(c.x*6.0+vec3(0.0,4.0,2.0),
+                                         6.0)-3.0)-1.0,
+                                 0.0,
+                                 1.0 );
+                rgb = rgb*rgb*(3.0-2.0*rgb);
+                return c.z * mix(vec3(1.0), rgb, c.y);
+            }}
+
+            void main() {{
+              vec3 c = hsb2rgb(vec3(1.0 - {COLOR_SCALE} * v_uv.x, 1.0, 1.0));
+              gl_FragColor = vec4(c, 1.0);
+            }}
+            '''
+        )
+        _, _, sw, sh = self.ctx.viewport
+        self.prog['hscale'] = 400 / sw
+        self.prog['vscale'] = 50 / sh
+        self.prog['dy'] = 1 - (50 / sh)
+        self.geom = PlaneGeometry().vertex_array(self.prog)
+
+    def render(self):
         self.geom.render()
 
 
@@ -141,6 +198,9 @@ class LegendKey:
 
     def render(self):
         self.geom.render()
+
+
+        
         
 class Scene:
 
@@ -182,7 +242,7 @@ class Scene:
 
         vertData = np.concatenate((
             locs,
-            np.stack([(addrs.alpha - minAlpha) / (maxAlpha - minAlpha), addrs.r2], axis = 1)
+            np.stack([1.0 - COLOR_SCALE * (addrs.alpha - minAlpha) / (maxAlpha - minAlpha), addrs.r2], axis = 1)
         ), axis = 1).astype('f4')
         
         self.ctx = moderngl.get_context()
@@ -224,6 +284,16 @@ vec3 color_map(float t) {
 
     return c0+t*(c1+t*(c2+t*(c3+t*(c4+t*(c5+t*c6)))));
 }
+//  Function from Iñigo Quiles
+//  https://www.shadertoy.com/view/MsS3Wc
+vec3 hsb2rgb( in vec3 c ){
+    vec3 rgb = clamp(abs(mod(c.x*6.0+vec3(0.0,4.0,2.0),
+                             6.0)-3.0)-1.0,
+                     0.0,
+                     1.0 );
+    rgb = rgb*rgb*(3.0-2.0*rgb);
+    return c.z * mix(vec3(1.0), rgb, c.y);
+}
             
 void main() {
     vec2 coord = gl_PointCoord - vec2(0.5);
@@ -231,7 +301,8 @@ void main() {
     float hue = color.x;
     vec4 c = vec4(0.0, 0.0, 0.0, alpha);
     // c.rgb = oklch2lsrgb(vec3(0.72, 0.15, hue));
-    c.rgb = color_map(hue);
+    // c.rgb = color_map(hue);
+    c.rgb = hsb2rgb(vec3(hue, 1.0, 1.0));
     gl_FragColor = c;
 }
             
@@ -261,6 +332,11 @@ void main() {
 
         self.legend_key = LegendKey(300, 50)
         self.l = 4
+
+        self.color_scale = ColorScale()
+        self.color_scale_min = TextPlane(f"{minAlpha :.2f}", font_size = 52, y = -0.9, x = 0.15)
+        self.color_scale_max = TextPlane(f"{maxAlpha :.2f}", font_size = 52, y = -0.9, x = -0.15)
+        self.color_scale_label = TextPlane(f"alpha", font_size = 52, y = -0.9, x = 0.225)
         
 
     def render(self):
@@ -290,6 +366,10 @@ void main() {
         self.vao.render()
         self.scale_text.render()
         self.legend_key.render()
+        self.color_scale.render()
+        self.color_scale_min.render()
+        self.color_scale_max.render()
+        self.color_scale_label.render()
 
         cur_time = (pygame.time.get_ticks() - self.start_time) / self.duration
         self.zoom = 2 ** (28 * cur_time - 4)
