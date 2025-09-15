@@ -321,7 +321,7 @@ void main() {
         self.target /= 2 ** (16 - 1)
         self.target -= 1
 
-        self.duration = 60 * 1000
+        self.duration = 100 * 1000
 
         _, _, sw, sh = self.ctx.viewport
         self.aspect = sw / sh
